@@ -53,25 +53,30 @@ _period_map = {               # dynamic lag sizes for each native frequency
     'MoM': {'daily':  30, 'weekly':  4,  'monthly':  1}
 }
 # ---------------------------------------------------------------------
-# 2. Load data and detect native frequency
+# 2. Remove initial data loading and setup
 # ---------------------------------------------------------------------
-data_frame = pd.read_excel('data_quarterly.xlsx', parse_dates=['Date'])
-data_frame.set_index('Date', inplace=True)
-
-date_diffs = data_frame.index.to_series().diff().dt.days.dropna()
-median_days = date_diffs.median()
-
-if median_days <= 1:
-    native_frequency = 'daily'
-elif median_days <= 7:
-    native_frequency = 'weekly'
-elif median_days <= 31:
-    native_frequency = 'monthly'
-elif median_days <= 92:
-    native_frequency = 'quarterly'
-else:
-    native_frequency = 'annual'
-
+# data_frame = pd.read_excel('data_quarterly.xlsx', parse_dates=['Date'])
+# data_frame.set_index('Date', inplace=True)
+# date_diffs = data_frame.index.to_series().diff().dt.days.dropna()
+# median_days = date_diffs.median()
+# if median_days <= 1:
+#     native_frequency = 'daily'
+# elif median_days <= 7:
+#     native_frequency = 'weekly'
+# elif median_days <= 31:
+#     native_frequency = 'monthly'
+# elif median_days <= 92:
+#     native_frequency = 'quarterly'
+# else:
+#     native_frequency = 'annual'
+# allowed_frequencies_by_native = {
+#     'daily':     ['daily','weekly','monthly','quarterly','annual'],
+#     'weekly':    ['weekly','monthly','quarterly','annual'],
+#     'monthly':   ['monthly','quarterly','annual'],
+#     'quarterly': ['quarterly','annual'],
+#     'annual':    ['annual']
+# }
+# allowed_frequencies = allowed_frequencies_by_native[native_frequency]
 allowed_frequencies_by_native = {
     'daily':     ['daily','weekly','monthly','quarterly','annual'],
     'weekly':    ['weekly','monthly','quarterly','annual'],
@@ -79,7 +84,6 @@ allowed_frequencies_by_native = {
     'quarterly': ['quarterly','annual'],
     'annual':    ['annual']
 }
-allowed_frequencies = allowed_frequencies_by_native[native_frequency]
 # ---------------------------------------------------------------------
 # 3. Transformation options
 # ---------------------------------------------------------------------
@@ -103,26 +107,30 @@ allowed_transformations_by_frequency = {
     'quarterly': ['YoY % Change','YoY Arithmetic Change','QoQ % Change','QoQ Arithmetic Change','Log'],
     'annual':    ['YoY % Change','YoY Arithmetic Change','Log']
 }
-transform_options = [inflation_adjust_option] + [
-    opt for opt in other_transform_options
-    if opt['value'] in allowed_transformations_by_frequency[native_frequency]
-]
+# transform_options = [inflation_adjust_option] + [
+#     opt for opt in other_transform_options
+#     if opt['value'] in allowed_transformations_by_frequency[native_frequency]
+# ]
 # ---------------------------------------------------------------------
 # 4. Variable whitelist (prefixes)
 # ---------------------------------------------------------------------
 allowed_prefixes = ('USA','EUR','JPN','SWI','DEU','FRA','ESP','ITA','CAN','AUS','WLD')
-allowed_variables = [c for c in data_frame.columns if c.startswith(allowed_prefixes)]
+# allowed_variables = [c for c in data_frame.columns if c.startswith(allowed_prefixes)]
 # ---------------------------------------------------------------------
 # 5. Helper functions
 # ---------------------------------------------------------------------
-def apply_transforms_to_series(series: pd.Series, transforms: list) -> pd.Series:
+def apply_transforms_to_series(series: pd.Series, transforms: list, native_frequency: str) -> pd.Series:
     """Apply selected transformations (inflation adjustment + various diffs/logs)."""
     txs = list(transforms or [])
     result = series.copy()
 
     # Inflation adjust first
     if 'Inflation Adjust' in txs:
-        cpi = data_frame['USA CPI'].reindex(result.index)
+        # Defensive: check for CPI column
+        if 'USA CPI' in series.index or 'USA CPI' in series:
+            cpi = series['USA CPI'].reindex(result.index)
+        else:
+            cpi = 1
         result = result.divide(cpi, axis=0)
         txs.remove('Inflation Adjust')
 
@@ -158,21 +166,22 @@ def build_panel(
     df,
     x_variable, x_frequency, x_transforms, x_lag,
     y_variable, y_frequency, y_transforms, y_lag,
-    fit_type, dual_axis_flags, diagnostic_choices
+    fit_type, dual_axis_flags, diagnostic_choices,
+    native_frequency
 ):
     """Return:
        scatter_figure, timeseries_figure, summary_panel (Dash HTML)
     """
-    base_x_series = apply_transforms_to_series(df[x_variable], x_transforms)
-    base_y_series = apply_transforms_to_series(df[y_variable], y_transforms)
+    base_x_series = apply_transforms_to_series(df[x_variable], x_transforms, native_frequency)
+    base_y_series = apply_transforms_to_series(df[y_variable], y_transforms, native_frequency)
 
     # ---------- Pre‑processing ----------
     common_prefix, _, _ = shorten_common_prefix(x_variable, y_variable)
 
     transformed_x = apply_lag_to_series(
-        apply_transforms_to_series(df[x_variable], x_transforms), x_lag)
+        apply_transforms_to_series(df[x_variable], x_transforms, native_frequency), x_lag)
     transformed_y = apply_lag_to_series(
-        apply_transforms_to_series(df[y_variable], y_transforms), y_lag)
+        apply_transforms_to_series(df[y_variable], y_transforms, native_frequency), y_lag)
 
     series_x = transformed_x.resample(frequency_to_rule[x_frequency]).last().dropna()
     series_y = transformed_y.resample(frequency_to_rule[y_frequency]).last().dropna()
@@ -470,15 +479,11 @@ app.layout = html.Div(style={'width':'90%','margin':'auto'}, children=[
                 # X controls
                 html.Div(style={'width':'48%','display':'flex','flexDirection':'column','gap':'8px'}, children=[
                     html.Label('X Variable'),
-                    dcc.Dropdown(id='x-axis-dropdown',
-                                 options=[{'label':v,'value':v} for v in allowed_variables], clearable=False),
+                    dcc.Dropdown(id='x-axis-dropdown', options=[], value=None, clearable=False),
                     html.Label('X Frequency'),
-                    dcc.Dropdown(id='x-freq-dropdown',
-                                 options=[{'label':f.capitalize(),'value':f} for f in allowed_frequencies],
-                                 value='quarterly', clearable=False),
+                    dcc.Dropdown(id='x-freq-dropdown', options=[], value=None, clearable=False),
                     html.Label('X Transformations'),
-                    dcc.Dropdown(id='x-transform-dropdown', options=transform_options,
-                                 multi=True, value=['YoY % Change']),
+                    dcc.Dropdown(id='x-transform-dropdown', options=[], value=[], multi=True),
                     html.Label('X Lag Periods'),
                     dcc.Input(id='x-lag-periods', type='number', value=0, min=0, step=1)
                 ]),
@@ -486,15 +491,11 @@ app.layout = html.Div(style={'width':'90%','margin':'auto'}, children=[
                 # Y controls
                 html.Div(style={'width':'48%','display':'flex','flexDirection':'column','gap':'8px'}, children=[
                     html.Label('Y Variable'),
-                    dcc.Dropdown(id='y-axis-dropdown',
-                                 options=[{'label':v,'value':v} for v in allowed_variables], clearable=False),
+                    dcc.Dropdown(id='y-axis-dropdown', options=[], value=None, clearable=False),
                     html.Label('Y Frequency'),
-                    dcc.Dropdown(id='y-freq-dropdown',
-                                 options=[{'label':f.capitalize(),'value':f} for f in allowed_frequencies],
-                                 value='quarterly', clearable=False),
+                    dcc.Dropdown(id='y-freq-dropdown', options=[], value=None, clearable=False),
                     html.Label('Y Transformations'),
-                    dcc.Dropdown(id='y-transform-dropdown', options=transform_options,
-                                 multi=True, value=['YoY % Change']),
+                    dcc.Dropdown(id='y-transform-dropdown', options=[], value=[], multi=True),
                     html.Label('Y Lag Periods'),
                     dcc.Input(id='y-lag-periods', type='number', value=0, min=0, step=1)
                 ])
@@ -567,8 +568,9 @@ def update_all_plots_and_analysis(
     # Use uploaded data if present
     if stored_json:
         df = pd.read_json(stored_json, orient='split')
+        allowed_variables, allowed_frequencies, transform_options, native_frequency = get_allowed_from_df(df)
     else:
-        df = data_frame
+        return go.Figure(), go.Figure(), html.Div("Please upload an Excel file to begin.")
     # Defensive: check for valid variable selection
     if not x_var or not y_var or x_var not in df.columns or y_var not in df.columns:
         return go.Figure(), go.Figure(), html.Div("Please select valid X and Y variables.")
@@ -577,7 +579,8 @@ def update_all_plots_and_analysis(
         df,
         x_var, x_freq, x_tx, x_lag,
         y_var, y_freq, y_tx, y_lag,
-        fit_type, dual_flags, diag_choices
+        fit_type, dual_flags, diag_choices,
+        native_frequency
     )
     return scatter_fig, ts_fig, summary_panel
 
@@ -641,28 +644,28 @@ def get_allowed_from_df(df):
 def update_dropdowns(stored_json):
     if stored_json:
         df = pd.read_json(stored_json, orient='split')
-    else:
-        df = data_frame
-    allowed_variables, allowed_frequencies, transform_options, native_frequency = get_allowed_from_df(df)
-    # Defaults
-    x_var = allowed_variables[0] if allowed_variables else None
-    y_var = allowed_variables[1] if len(allowed_variables) > 1 else (allowed_variables[0] if allowed_variables else None)
-    freq = allowed_frequencies[0] if allowed_frequencies else None
-    tx = ['YoY % Change'] if any('YoY % Change' in o['value'] for o in transform_options) else []
-    return (
-        [{'label':v,'value':v} for v in allowed_variables],
-        [{'label':v,'value':v} for v in allowed_variables],
-        [{'label':f.capitalize(),'value':f} for f in allowed_frequencies],
-        [{'label':f.capitalize(),'value':f} for f in allowed_frequencies],
-        transform_options,
-        transform_options,
-        x_var,
-        y_var,
-        freq,
-        freq,
-        tx,
-        tx
-    )
+        allowed_variables, allowed_frequencies, transform_options, native_frequency = get_allowed_from_df(df)
+        # Defaults
+        x_var = allowed_variables[0] if allowed_variables else None
+        y_var = allowed_variables[1] if len(allowed_variables) > 1 else (allowed_variables[0] if allowed_variables else None)
+        freq = allowed_frequencies[0] if allowed_frequencies else None
+        tx = ['YoY % Change'] if any('YoY % Change' in o['value'] for o in transform_options) else []
+        return (
+            [{'label':v,'value':v} for v in allowed_variables],
+            [{'label':v,'value':v} for v in allowed_variables],
+            [{'label':f.capitalize(),'value':f} for f in allowed_frequencies],
+            [{'label':f.capitalize(),'value':f} for f in allowed_frequencies],
+            transform_options,
+            transform_options,
+            x_var,
+            y_var,
+            freq,
+            freq,
+            tx,
+            tx
+        )
+    # If no data, return empty dropdowns
+    return [], [], [], [], [], [], None, None, None, None, [], []
 # ---------------------------------------------------------------------
 # 9. Callback – JSON download
 # ---------------------------------------------------------------------
@@ -671,5 +674,6 @@ def update_dropdowns(stored_json):
 # 10. Run
 # ---------------------------------------------------------------------
 if __name__ == '__main__':
-    register_json_download_callback(app, data_frame, frequency_to_rule, _period_map, native_frequency)
+    # No initial data_frame or native_frequency, so pass None or dummy values if needed
+    register_json_download_callback(app, None, frequency_to_rule, _period_map, None)
     app.run_server(debug=True)
