@@ -676,4 +676,4 @@ def update_dropdowns(stored_json):
 if __name__ == '__main__':
     # No initial data_frame or native_frequency, so pass None or dummy values if needed
     register_json_download_callback(app, None, frequency_to_rule, _period_map, None)
-    app.run_server(debug=True)
+    app.run(debug=True)
